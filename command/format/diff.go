@@ -246,12 +246,42 @@ func (p *blockBodyDiffPrinter) writeNestedBlockDiffs(name string, blockS *config
 		oldItems := ctyCollectionValues(old)
 		newItems := ctyCollectionValues(new)
 
-		changes := ctyObjectSequenceDiff(oldItems, newItems, 0.2)
-		if len(changes) > 0 && blankBefore {
+		// Here we intentionally preserve the index-based correspondance
+		// between old and new, rather than trying to detect insertions
+		// and removals in the list, because this more accurately reflects
+		// how Terraform Core and providers will understand the change,
+		// particularly when the nested block contains computed attributes
+		// that will themselves maintain correspondance by index.
+
+		// commonLen is number of elements that exist in both lists, which
+		// will be presented as updates (~). Any additional items in one
+		// of the lists will be presented as either creates (+) or deletes (-)
+		// depending on which list they belong to.
+		var commonLen int
+		switch {
+		case len(oldItems) < len(newItems):
+			commonLen = len(oldItems)
+		default:
+			commonLen = len(newItems)
+		}
+
+		if blankBefore && (len(oldItems) > 0 || len(newItems) > 0) {
 			p.buf.WriteRune('\n')
 		}
-		for _, change := range changes {
-			p.writeNestedBlockDiff(name, nil, &blockS.Block, change.Action, change.Old, change.New, indent)
+		for i := 0; i < commonLen; i++ {
+			oldItem := oldItems[i]
+			newItem := newItems[i]
+			p.writeNestedBlockDiff(name, nil, &blockS.Block, diffs.Update, oldItem, newItem, indent)
+		}
+		for i := commonLen; i < len(oldItems); i++ {
+			oldItem := oldItems[i]
+			newItem := cty.NullVal(oldItem.Type())
+			p.writeNestedBlockDiff(name, nil, &blockS.Block, diffs.Delete, oldItem, newItem, indent)
+		}
+		for i := commonLen; i < len(newItems); i++ {
+			newItem := newItems[i]
+			oldItem := cty.NullVal(newItem.Type())
+			p.writeNestedBlockDiff(name, nil, &blockS.Block, diffs.Create, oldItem, newItem, indent)
 		}
 	case configschema.NestingSet:
 		// For the sake of handling nested blocks, we'll treat a null set
